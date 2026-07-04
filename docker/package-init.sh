@@ -72,6 +72,70 @@ js_packages_ready() {
     done
 }
 
+# 安装 CJK 字体让 matplotlib 能渲染中文(否则中文显示为方框)。幂等:已存在则跳过。
+install_cjk_font() {
+    local mpl_data="/pkgs/python/${PYTHON_VERSION}/lib/python${PYTHON_SITE_VERSION}/site-packages/matplotlib/mpl-data"
+    local font_dir="${mpl_data}/fonts/ttf"
+    local font_file="${font_dir}/NotoSansCJKsc-Regular.otf"
+    if [ ! -d "$font_dir" ]; then
+        echo "matplotlib mpl-data not found yet, skipping CJK font"
+        return 0
+    fi
+
+    # 1. 下载 Noto Sans CJK SC(若缺)
+    if [ ! -f "$font_file" ]; then
+        local url="${CJK_FONT_URL:-https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf}"
+        if ! curl -fsSL "$url" -o "$font_file"; then
+            echo "WARNING: CJK font download failed from $url"
+            echo "Chinese in plots will show as boxes. Set CJK_FONT_URL to a reachable mirror and re-run."
+            return 0
+        fi
+        echo "CJK font downloaded: NotoSansCJKsc-Regular.otf"
+    fi
+
+    # 2. matplotlibrc 默认字体(若未设)
+    local rc="${mpl_data}/matplotlibrc"
+    if [ -f "$rc" ] && ! grep -q "AIE CJK font" "$rc"; then
+        cat >> "$rc" << 'RC'
+
+# === AIE CJK font (appended by package-init) ===
+font.sans-serif: SimHei, Microsoft YaHei, WenQuanYi Micro Hei, Noto Sans CJK SC, DejaVu Sans, sans-serif
+axes.unicode_minus: False
+RC
+        echo "matplotlibrc updated: default font includes CJK"
+    fi
+
+    # 3. 改名复制:模型常写死 ['SimHei'] / ['Microsoft YaHei'] 等,提供同名字体让设置生效
+    local py="/pkgs/python/${PYTHON_VERSION}/bin/python3"
+    if [ -x "$py" ]; then
+        cat > /tmp/rename_cjk.py << 'PYEOF'
+import os, sys
+from fontTools.ttLib import TTFont
+src, outdir = sys.argv[1], sys.argv[2]
+for family, out in [
+    ("SimHei", "SimHei.otf"),
+    ("Microsoft YaHei", "MicrosoftYaHei.otf"),
+    ("WenQuanYi Micro Hei", "WenQuanYiMicroHei.otf"),
+]:
+    p = os.path.join(outdir, out)
+    if os.path.exists(p):
+        continue
+    f = TTFont(src)
+    for r in f["name"].names:
+        if r.nameID in (1, 4, 16):
+            try:
+                r.string = family.encode(r.getEncoding())
+            except Exception:
+                pass
+    f.save(p)
+    print("renamed:", out, "->", family)
+PYEOF
+        "$py" /tmp/rename_cjk.py "$font_file" "$font_dir" 2>&1 | sed 's/^/  /'
+    else
+        echo "WARNING: python3 not found at $py, skipping SimHei alias"
+    fi
+}
+
 load_js_packages
 
 echo "=============================================="
@@ -95,6 +159,7 @@ packages_ready() {
 if [ -f "$MARKER_FILE" ] && [ "$FORCE_REBUILD" != "true" ]; then
     if packages_ready; then
         echo "Packages already initialized (marker file exists)"
+        install_cjk_font   # 已初始化的 /pkgs 也补一次字体(缺才下)
         echo "Set FORCE_REBUILD=true to force reinstall"
         echo ""
         echo "Installed packages:"
@@ -235,6 +300,9 @@ else
     echo "ERROR: pip not found at $PIP_PATH"
     INSTALL_FAILED=true
 fi
+
+# CJK 字体(中文渲染)
+install_cjk_font
 
 # ==============================
 # Install Node.js
