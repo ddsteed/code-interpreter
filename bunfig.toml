@@ -1,0 +1,3 @@
+[install]
+# 国内 build 加速：用淘宝 npm 镜像（registry.npmjs.org 直连在阿里云国内机慢/卡）
+registry = "https://registry.npmmirror.com"
