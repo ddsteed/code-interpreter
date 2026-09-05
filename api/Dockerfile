@@ -29,8 +29,10 @@ RUN git clone -b master --single-branch https://github.com/google/nsjail.git . \
 RUN make -j$(nproc)
 
 COPY api/src/spec-guard.c /tmp/spec-guard.c
+COPY docker/rootfs-setup.c /tmp/rootfs-setup.c
 RUN gcc -O2 -static -o /usr/local/bin/spec-guard /tmp/spec-guard.c \
-    && chmod 0111 /usr/local/bin/spec-guard
+    && gcc -O2 -static -o /usr/local/bin/sandbox-rootfs-setup /tmp/rootfs-setup.c \
+    && chmod 0111 /usr/local/bin/spec-guard /usr/local/bin/sandbox-rootfs-setup
 
 # ============================================================================
 # Stage 1b: Build language runtime packages (only consumed by sandbox-runner-baked)
@@ -146,7 +148,8 @@ RUN rm -f /usr/bin/nsenter /usr/bin/unshare /usr/bin/chroot /usr/sbin/chroot \
     2>/dev/null || true
 
 COPY api/src/entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh
+COPY api/src/hosted-app-launcher.sh /usr/local/bin/codeapi-hosted-app-launcher
+RUN chmod +x ./entrypoint.sh /usr/local/bin/codeapi-hosted-app-launcher
 
 # ============================================================================
 # Stage 2b: AWS Lambda MicroVM container base image
@@ -168,6 +171,34 @@ ENV PORT=8080 \
 
 EXPOSE 8080/tcp
 ENTRYPOINT ["/sandbox_api/entrypoint.sh"]
+
+# Local direct-NsJail runtime used by @librechat/code's Docker supervisor.
+# Runtime packages are mounted read-only at /pkgs, matching docker-compose.mac.
+# This profile shares the Docker Desktop VM kernel and is for operator-trusted
+# local/BYOM development; production untrusted execution should retain the
+# separate MicroVM boundary described in the repository security guidance.
+FROM sandbox-build AS local-oci-runtime
+
+ENV PORT=2000 \
+    SANDBOX_PACKAGES_DIRECTORY=/pkgs \
+    SANDBOX_OUTPUT_MAX_SIZE=65536 \
+    SANDBOX_SESSION_WORKSPACE_ENABLED=true \
+    SANDBOX_USE_CGROUPV2=false \
+    SANDBOX_REMOVE_UMOUNT_AFTER_STARTUP=false
+
+EXPOSE 2000/tcp
+ENTRYPOINT ["/sandbox_api/entrypoint.sh"]
+
+# Dedicated resident-process host. This image deliberately keeps the runner
+# control listener on 8080 and exposes one fixed user-app port separately.
+# `/execute` is disabled when hosted-app mode is enabled; the control plane
+# restores a checkpoint and starts the app through `/api/v2/hosted-app/start`.
+FROM lambda-microvm-runner AS lambda-microvm-app-host
+
+ENV SANDBOX_HOSTED_APPS_ENABLED=true \
+    SANDBOX_HOSTED_APP_PORT=3000
+
+EXPOSE 3000/tcp
 
 # ============================================================================
 # Stage 3: Build the Rust launcher binary (Fedora for libkrun ABI)
@@ -212,6 +243,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all
 
 COPY --from=launcher-builder /launcher/target/release/sandbox-launcher /usr/local/bin/launcher
+COPY --from=nsjail-builder /usr/local/bin/sandbox-rootfs-setup /sandbox-rootfs-setup
 
 COPY launcher/entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
 COPY docker/start-direct-sandbox.sh /usr/local/bin/start-direct-sandbox.sh
