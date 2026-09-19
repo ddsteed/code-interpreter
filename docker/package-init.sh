@@ -7,6 +7,12 @@
 
 set -e
 
+# 国内 build 加速：pip/uv 走清华 PyPI 镜像、npm 走淘宝镜像
+# （pypi.org / registry.npmjs.org 在国内机直连超时，实测科学计算大包安装必挂）
+export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+export NPM_CONFIG_REGISTRY="https://registry.npmmirror.com"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MARKER_FILE="/pkgs/.initialized"
 FORCE_REBUILD="${FORCE_REBUILD:-false}"

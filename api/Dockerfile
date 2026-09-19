@@ -124,6 +124,8 @@ COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
 WORKDIR /sandbox_api
 
 COPY api/package.json api/bun.lock ./
+# 国内 build 加速：bunfig.toml 指定淘宝 npm 镜像（官方源在阿里云国内机慢/卡）
+COPY bunfig.toml ./
 RUN bun install --frozen-lockfile
 
 COPY api/tsconfig.json ./

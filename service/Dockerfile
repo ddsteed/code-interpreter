@@ -6,10 +6,13 @@ WORKDIR /app
 FROM base AS install
 RUN mkdir -p /temp/dev
 COPY service/package.json service/bun.lock /temp/dev/
+# 国内 build 加速：bunfig.toml 指定淘宝 npm 镜像（官方源在阿里云国内机慢/卡）
+COPY bunfig.toml /temp/dev/
 RUN cd /temp/dev && bun install --frozen-lockfile
 
 RUN mkdir -p /temp/prod
 COPY service/package.json service/bun.lock /temp/prod/
+COPY bunfig.toml /temp/prod/
 RUN cd /temp/prod && bun install --frozen-lockfile --production
 
 # Build all entry points
