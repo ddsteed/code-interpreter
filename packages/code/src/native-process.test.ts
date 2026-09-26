@@ -146,6 +146,7 @@ test('executor bootstrap excludes bridge credentials and Node injection variable
   assert.deepEqual(fake.options?.execArgv, []);
   assert.deepEqual(fake.options?.env, { PATH: '/bin' });
   assert.equal(JSON.stringify(fake.messages).includes('secret'), false);
+  assert.equal('gitSharedObjectDirectory' in fake.messages[0].options, false);
   await sandbox.close();
 });
 
@@ -181,12 +182,14 @@ test('executor forwards the resolved command policy without worker credentials',
 
 test('executor hands credentials over IPC only for the current command', async () => {
   const fake = fixture();
+  let credentialCwd: string | undefined;
   const sandbox = new NativeProcessWorkspaceCommandSandbox(
     {
       workspaceRoot: '/workspace',
       maskedEnvironment: {
         variables: [{ name: 'TOKEN', injectHosts: ['github.com'] }],
-        async resolve() {
+        async resolve(_signal, cwd) {
+          credentialCwd = cwd;
           return { TOKEN: 'per-command-secret' };
         },
         wrapCommand(command) {
@@ -208,6 +211,7 @@ test('executor hands credentials over IPC only for the current command', async (
   assert.deepEqual(fake.messages[1].credentials, {
     TOKEN: 'per-command-secret',
   });
+  assert.equal(credentialCwd, '/workspace');
   assert.equal(fake.messages[1].wrappedCommand, 'wrapped printf ok');
   await sandbox.close();
 });

@@ -283,14 +283,38 @@ repositories the agent may access:
 
 ```bash
 LIBRECHAT_CODE_GITHUB_APP_ID=12345 \
-LIBRECHAT_CODE_GITHUB_INSTALLATION_ID=67890 \
 LIBRECHAT_CODE_GITHUB_PRIVATE_KEY_FILE=/secure/librechat-agent.pem \
 librechat-code run --worker-dir /path/to/project --allow-workspace-commands
 ```
 
 The private key must be an owner-only regular file outside the workspace. It is
 read only by the trusted worker, which mints and refreshes short-lived
-installation tokens. A personal access token is supported as a fallback with
+installation tokens. At startup, the worker binds each explicitly admitted
+workspace root to its Git repository. Commands in those independent roots can
+use simultaneous installations on personal accounts and organizations without
+being restarted or reconfigured, while a command cannot gain access by changing
+its workspace's remote URL. Tokens are scoped and cached per repository.
+
+For trusted VMs that intentionally work in multiple Git checkouts beneath one
+admitted root, opt in to `--github-repository-routing checkout` (or
+`LIBRECHAT_CODE_GITHUB_REPOSITORY_ROUTING=checkout`) together with the
+`trusted-vm` command policy. Each command then uses the repository identified
+by its current checkout's local `origin` URL, including linked worktrees.
+The command must set its working directory to that checkout; a shell `cd`
+inside a command does not change which credential was selected before launch.
+This does not widen the admitted filesystem roots, but a command able to alter
+a checkout's remote can obtain a token for **any repository where the App is
+installed**. Use this mode only where the machine operator trusts the VM and
+the App's installation scope; the default `admitted` mode keeps the startup
+binding. Checkout routing requires an App without a fixed installation ID.
+
+For compatibility with deployments that intentionally bind a worker to one
+installation, set the optional legacy
+`LIBRECHAT_CODE_GITHUB_INSTALLATION_ID` fallback.
+
+App-authenticated commits use the GitHub App bot's canonical no-reply identity,
+so GitHub links them to the bot profile and avatar. A personal access token is
+supported as a fallback with
 `LIBRECHAT_CODE_GITHUB_TOKEN`, but the GitHub App is the safer default because
 its repository access and permissions can be narrowly installed and revoked.
 Native Windows credential storage is unavailable until native DACL removal and
@@ -696,8 +720,65 @@ Slots are per machine, not a fleet-wide execution limit. A busy machine does not
 consume another machine's slots. Requests for the same root remain serialized,
 including commands started through background tools. Independent checkouts can
 use different slots; selecting subdirectories beneath one registered parent root
-does not create separate scheduling boundaries. Linked Git worktrees share Git
-metadata and are not supported by selected-project registration.
+does not create separate scheduling boundaries.
+
+To bind each conversation to an isolated checkout of the selected Git
+repository, configure worker-owned conversation worktrees:
+
+```sh
+librechat-code run \
+  --worker-dir /projects/LibreChat \
+  --workspace-lease-slots 4 \
+  --conversation-worktree-root /var/lib/librechat-code/worktrees \
+  --conversation-worktree-max 64 \
+  --conversation-worktree-clone-timeout-ms 300000 \
+  --allow-workspace-writes \
+  --allow-workspace-commands
+```
+
+`LIBRECHAT_CODE_CONVERSATION_WORKTREE_ROOT` and
+`LIBRECHAT_CODE_CONVERSATION_WORKTREE_MAX` are the environment equivalents;
+`LIBRECHAT_CODE_CONVERSATION_WORKTREE_CLONE_TIMEOUT_MS` controls the bounded
+clone budget (five minutes by default, from 30 seconds through 30 minutes).
+The storage root must be owner-controlled, must not overlap a registered
+workspace, and every registered source must be a Git repository. The worker
+creates a deterministic branch in an isolated local checkout for the opaque
+conversation identity supplied by LibreChat. Each checkout owns its writable
+Git metadata and object storage, without alternates or hardlinks to the source.
+Provisioning pins the source Git-directory and object-store identities. It copies
+Git data through no-follow, descriptor-relative reads into private staging before
+running Git; source hooks and config includes are not used. The clone budget
+also bounds this snapshot. Local hardlinks only connect private staging to its
+new checkout, never to the source; staging is removed before setup. Source
+alternates admitted at worker startup are materialized into independent objects.
+Git metadata replacement requires operator recovery, not automatic re-admission.
+Host paths remain private. The configured count
+is a hard per-machine quota, provisioning is serialized, and operations for one
+conversation remain serialized while different conversations may occupy
+different lease slots. Recognizable abandoned checkouts without a lifecycle
+record are discarded before admission. New provisioning reserves its record
+before starting Git or setup; a worker crash leaves that checkout reserved for
+operator recovery because child processes might still be running.
+Reservations count even when a crash happens before a checkout directory exists.
+
+Cancellation also covers waiting for the provisioning lock, cloning, and setup.
+The worker waits for setup cleanup before releasing the assignment. If cleanup
+cannot be confirmed, the checkout stays reserved and fails closed on restart.
+A completed checkout with a changed source identity or invalid completion record
+is preserved for operator recovery, including any uncommitted work. After stopping
+the worker and confirming no executor still uses the checkout, an operator can
+archive the affected checkout and its adjacent `.complete` record before retrying.
+Also archive any adjacent `.source` staging directory. Pre-release version-1
+completion records are deliberately preserved but not admitted by this version;
+they do not contain the required source Git identity binding.
+
+By default, GitHub App routing is inherited from the operator-admitted source
+repository; commands cannot select a different installation by rewriting a
+worktree remote. On trusted VMs, the opt-in checkout routing mode above instead
+uses the current worktree's local `origin` URL, within the admitted root.
+Legacy requests without a conversation identity continue to use the selected
+source root. Older Code API deployments do not negotiate the capability, so the
+worker omits it until every request path understands the isolation boundary.
 
 Admission waits at most 30 seconds. A `WORKSPACE_QUEUE_TIMEOUT` response (HTTP
 503, `Retry-After: 1`) means the operation was not assigned or started; wait for

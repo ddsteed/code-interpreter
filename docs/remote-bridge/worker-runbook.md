@@ -323,13 +323,28 @@ Configure the worker, preferably in a separate service drop-in:
 ```ini
 [Service]
 Environment=LIBRECHAT_CODE_GITHUB_APP_ID=12345
-Environment=LIBRECHAT_CODE_GITHUB_INSTALLATION_ID=67890
 Environment=LIBRECHAT_CODE_GITHUB_PRIVATE_KEY_FILE=/home/librechat-code/.config/librechat-code/github-app.pem
 ```
 
-The trusted worker mints short-lived installation tokens. Sandboxed commands
-receive masked Git/`gh` credentials only for the configured GitHub hosts; the
-token is not written to the repository, remote URL, or Git configuration.
+Install the same App separately on every personal account or organization the
+worker is allowed to use. By default, the worker binds each admitted workspace
+root to its repository at startup, then mints and caches repository-scoped
+tokens. Different admitted roots can use different installations without
+restarting the worker. For a trusted VM with multiple checkouts under one root,
+set `LIBRECHAT_CODE_GITHUB_REPOSITORY_ROUTING=checkout` and use the `trusted-vm`
+command policy. This opt-in resolves the local `origin` URL of each command's
+current checkout, including linked worktrees. It remains inside the admitted
+filesystem root, but anyone able to alter a checkout's remote can select any
+repository where the App is installed; keep the App's installation scope narrow.
+Pass the checkout as the command working directory; changing directories only
+inside the shell cannot change the token chosen before command launch.
+Set `LIBRECHAT_CODE_GITHUB_INSTALLATION_ID` only as a legacy
+fixed-installation fallback; it cannot be combined with checkout routing.
+
+Sandboxed commands receive masked Git/`gh` credentials only for the configured
+GitHub hosts; the token is not written to the repository, remote URL, or Git
+configuration. Git commits receive the App bot's canonical no-reply identity so
+GitHub renders the bot profile and avatar.
 
 ## 10. Run under systemd
 
@@ -518,7 +533,8 @@ command, cancellation, or settlement whose effects may be incomplete.
 -   [ ] Pairing is principal-bound and the identity file is private.
 -   [ ] Definitions are outside roots and immutable to sandboxed tools.
 -   [ ] Workspace ancestors are not group/other writable.
--   [ ] GitHub App is optional, least-privilege, and installed only where needed.
+-   [ ] GitHub App is optional, least-privilege, and installed on every account
+        the worker is expected to use.
 -   [ ] Approval policy remains enforced independently of worker capability.
 -   [ ] Service manager uses the intended executable and configuration.
 -   [ ] Worker is online, ready, and advertises the expected workspace.
