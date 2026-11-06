@@ -93,22 +93,22 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache Bun packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-codeapi-api-bun-1.4.2-${{ hashFiles('api/bun.lock') }}
+          key: ${{ runner.os }}-codeapi-api-bun-1.4.4-${{ hashFiles('api/bun.lock') }}
           restore-keys: |
-            ${{ runner.os }}-codeapi-api-bun-1.4.2-
+            ${{ runner.os }}-codeapi-api-bun-1.4.4-
 
       - name: Install dependencies
         run: bun ci
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22
+          node-version: 22.23.4
 
       - name: Compile anonymous-pipe addon
         run: |
@@ -149,7 +149,7 @@ jobs:
             --workdir /work/api \
             --env SANDBOX_CLEANUP_TMPFS_TEST=1 \
             --env SANDBOX_LOG_LEVEL=error \
-            oven/bun:1.4.2-debian \
+            oven/bun:1.4.4-debian \
             bun test src/cleanup.integration.test.ts
 
   nsjail-ipc-tests:
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - name: Render native sandbox policy
         working-directory: api
         run: |
@@ -184,6 +184,14 @@ jobs:
             --mount "type=bind,source=$GITHUB_WORKSPACE/tests,target=/tests,readonly" \
             --entrypoint /usr/local/bin/node \
             launcher-guest-test /tests/pipe_runtime_image.cjs
+      - name: Execute through the packaged guest API without build-stage ENV
+        run: |
+          for addon_path in unset empty override; do
+            docker run --rm --privileged --network none \
+              --mount "type=bind,source=$GITHUB_WORKSPACE,target=/work,readonly" \
+              --entrypoint bun launcher-guest-test \
+              /work/tests/sandbox_pipe_addon_image.ts "$addon_path"
+          done
       - name: Load legacy netfilter modules for hosted-app isolation
         run: sudo modprobe -a ip_tables ip6_tables iptable_filter ip6table_filter xt_conntrack xt_owner ipt_REJECT ip6t_REJECT
       - name: Verify supervisor filter and anonymous stdio
@@ -225,6 +233,33 @@ jobs:
             nsjail-ipc-test \
             python3 /tests/tool_call_pipes.py /policy /broker.cjs /client.py
 
+  guest-api-image-tests:
+    name: Guest API Execution (${{ matrix.dockerfile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: api/Dockerfile
+            target: sandbox-build
+          - dockerfile: docker/Dockerfile.worker-sandbox
+            target: sandbox-rootfs
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Build the production guest rootfs
+        run: docker build --target "${{ matrix.target }}" -t guest-api-test -f "${{ matrix.dockerfile }}" .
+      - name: Execute through the packaged guest API without build-stage ENV
+        # Test the roots copied into the direct/KVM runners, removing the
+        # Docker ENV metadata that does not survive that COPY/VM boundary.
+        run: |
+          for addon_path in unset empty override; do
+            docker run --rm --privileged --network none \
+              --mount "type=bind,source=$GITHUB_WORKSPACE,target=/work,readonly" \
+              --entrypoint bun guest-api-test \
+              /work/tests/sandbox_pipe_addon_image.ts "$addon_path"
+          done
+
   service-unit-tests:
     name: Service Unit Tests
     runs-on: ubuntu-latest
@@ -236,15 +271,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache Bun packages
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-codeapi-service-bun-1.4.2-${{ hashFiles('service/bun.lock') }}
+          key: ${{ runner.os }}-codeapi-service-bun-1.4.4-${{ hashFiles('service/bun.lock') }}
           restore-keys: |
-            ${{ runner.os }}-codeapi-service-bun-1.4.2-
+            ${{ runner.os }}-codeapi-service-bun-1.4.4-
 
       - name: Install dependencies
         run: bun ci
@@ -271,7 +306,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['22.21.0', '24.16.0']
+        node-version: ['22.23.4', '24.22.1']
     defaults:
       run:
         working-directory: packages/code
@@ -308,7 +343,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.16.0
+          node-version: 24.22.1
       - run: npm ci
       - run: npm run build
       - name: Selected project root containment tests
@@ -335,7 +370,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 24.16.0
+          node-version: 24.22.1
       - name: Install bubblewrap
         run: |
           sudo apt-get update -qq
@@ -360,7 +395,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Install service dependencies
         working-directory: service
@@ -432,7 +467,7 @@ jobs:
           docker buildx inspect --bootstrap
 
       - name: Build Lambda MicroVM runner image
-        # The target pins Bun 1.4.2 and installs api/bun.lock frozen. Building
+        # The target pins Bun 1.4.4 and installs api/bun.lock frozen. Building
         # natively catches architecture-specific package and Docker layer
         # failures without retaining a second multi-gigabyte image copy.
         run: |
